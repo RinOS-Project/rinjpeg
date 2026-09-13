@@ -1,0 +1,2 @@
+# libjpeg
+RinOS用jpegライブラリ
