@@ -45,3 +45,19 @@ appropriate for the caller. The decoder retains no input or output pointers
 after return. This is a header-defined source API with no separately versioned
 binary ABI guarantee. RinOS integrates it through the parent RinImage build;
 this repository has no standalone build or test target.
+
+## Public API contract
+
+| Requirement | Contract |
+| --- | --- |
+| Purpose | RinJPEG is RinOS's bounded decoder for a documented baseline JPEG subset, intended for use through RinImage or directly through its C interface. |
+| Supported API | The public C interface is `rinjpeg.h`. It decodes 8-bit baseline SOF0 grayscale or three-component JPEG with supported 4:4:4, 4:2:2, and 4:2:0 sampling. |
+| Unsupported API | Progressive JPEG, other frame types, unsupported component layouts, and formats other than JPEG are rejected. |
+| ownership | The caller owns the input bytes and destination buffer and keeps them valid for the call. The decoder does not retain either buffer. |
+| thread-safety | Independent calls with separate input and output buffers may run concurrently. Do not share writable output buffers between calls. |
+| limits | Input is limited to 64 MiB; width and height to 8192 each; decoded pixels to 16,777,216. Exceeding a limit is rejected. |
+| errors | Invalid, truncated, unsupported, or over-limit input returns a failure status; callers must not use output unless the call succeeds. |
+| ABI stability | The C declarations in `rinjpeg.h` are the public ABI. No ABI stability guarantee is currently published; consumers should rebuild against the version they use. |
+| security | Treat JPEG bytes as untrusted. The decoder applies size and dimension limits, but callers remain responsible for checking decode results and bounding surrounding work. |
+| build | No standalone build entry point is provided. RinImage is the supported integration point in the RinOS build. |
+| test | No standalone test command is provided by this repository. RinImage integration tests, when present in the consuming tree, are the relevant validation. |
