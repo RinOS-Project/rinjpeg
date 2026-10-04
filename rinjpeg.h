@@ -446,7 +446,7 @@ static inline int rjpeg_parse_sof0(RJpegDecoder* d, size_t end) {
     uint8_t component_count = 0;
     uint16_t height = 0;
     uint16_t width = 0;
-    RJpegComponent components[3] = {};
+    RJpegComponent components[3] = {0};
     if (!rjpeg_take8(d, &precision) || !rjpeg_take16(d, &height) ||
         !rjpeg_take16(d, &width) || !rjpeg_take8(d, &component_count))
         return RJPEG_DATA_ERROR;
@@ -802,7 +802,7 @@ static inline int rjpeg_decode_scan_pass(RJpegDecoder* decoder,
                                          int publish_pixels,
                                          uint16_t* next_marker_out) {
     int16_t block[64] = {0};
-    RJpegComponent active_components[3] = {};
+    RJpegComponent active_components[3] = {0};
     int max_horizontal_sampling;
     int max_vertical_sampling;
     int mcu_width;
@@ -999,7 +999,7 @@ static inline int rjpeg_get_info_with_scratch(const uint8_t* data,
     if (!data || !width || !height || !decoder) return RJPEG_ERROR;
     rjpeg_decoder_clear(decoder);
     size_t scan_position = 0;
-    RJpegScan first_scan = {};
+    RJpegScan first_scan = {0};
     int result = rjpeg_parse_headers(
         data, size, decoder, &scan_position, &first_scan);
     if (result != RJPEG_OK) return result;
@@ -1010,7 +1010,7 @@ static inline int rjpeg_get_info_with_scratch(const uint8_t* data,
 
 static inline int rjpeg_get_info(const uint8_t* data, size_t size,
                                   int* width, int* height) {
-    RJpegDecoder decoder = {};
+    RJpegDecoder decoder = {0};
     return rjpeg_get_info_with_scratch(data, size, width, height, &decoder);
 }
 
@@ -1028,7 +1028,7 @@ static inline int rjpeg_decode_with_scratch(const uint8_t* data,
         return RJPEG_ERROR;
     rjpeg_decoder_clear(decoder);
     size_t scan_position = 0;
-    RJpegScan first_scan = {};
+    RJpegScan first_scan = {0};
     int result = rjpeg_parse_headers(
         data, size, decoder, &scan_position, &first_scan);
     if (result != RJPEG_OK) return result;
@@ -1057,7 +1057,7 @@ static inline int rjpeg_decode_with_scratch(const uint8_t* data,
 static inline int rjpeg_decode(const uint8_t* data, size_t size,
                                 uint32_t* pixels, size_t pixel_capacity,
                                 int max_width, int max_height) {
-    RJpegDecoder decoder = {};
+    RJpegDecoder decoder = {0};
     return rjpeg_decode_with_scratch(data, size, pixels, pixel_capacity,
                                      max_width, max_height, &decoder);
 }

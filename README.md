@@ -2,7 +2,7 @@
 
 RinJPEG is a small, header-only C decoder used by RinImage for a bounded JPEG
 profile. It is not a general-purpose or fully JPEG-compatible replacement for
-libjpeg.
+libjpeg. The public header is C11-compatible as well as usable from C++ callers.
 
 ## Supported API
 
