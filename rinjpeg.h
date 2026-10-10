@@ -24,6 +24,7 @@
 #define RJPEG_ERROR         -1
 #define RJPEG_DATA_ERROR    -2
 #define RJPEG_UNSUPPORTED   -3
+#define RJPEG_CANCELLED     -4
 
 #define RJPEG_MAX_INPUT_BYTES (64u * 1024u * 1024u)
 #define RJPEG_MAX_DIMENSION 8192
@@ -74,6 +75,8 @@ typedef struct {
     int restart_interval;
 } RJpegScan;
 
+typedef int (*RJpegCancellationFunction)(void* context);
+
 typedef struct {
     const uint8_t* data;
     size_t size;
@@ -98,7 +101,14 @@ typedef struct {
     uint32_t bit_buf;
     int bit_count;
     int failed;
+    RJpegCancellationFunction cancellation;
+    void* cancellation_context;
 } RJpegDecoder;
+
+static inline int rjpeg_cancelled(const RJpegDecoder* decoder) {
+    return decoder != NULL && decoder->cancellation != NULL &&
+           decoder->cancellation(decoder->cancellation_context) != 0;
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * ユーティリティ
@@ -379,10 +389,15 @@ static inline int rjpeg_begin_segment(RJpegDecoder* d, size_t* end_out) {
 
 static inline int rjpeg_next_marker(RJpegDecoder* d, uint16_t* marker_out) {
     uint8_t code = 0;
+    size_t skipped = 0u;
     if (!d || !marker_out || d->pos >= d->size ||
         d->data[d->pos++] != 0xffu)
         return 0;
-    while (d->pos < d->size && d->data[d->pos] == 0xffu) d->pos++;
+    while (d->pos < d->size && d->data[d->pos] == 0xffu) {
+        d->pos++;
+        if ((++skipped & 4095u) == 0u && rjpeg_cancelled(d))
+            return RJPEG_CANCELLED;
+    }
     if (!rjpeg_take8(d, &code) || code == 0u) return 0;
     *marker_out = (uint16_t)(0xff00u | (uint16_t)code);
     return 1;
@@ -602,7 +617,12 @@ static inline int rjpeg_parse_headers(const uint8_t* data,
     for (;;) {
         uint16_t marker = 0;
         size_t end = 0;
-        if (!rjpeg_next_marker(decoder, &marker)) return RJPEG_DATA_ERROR;
+        if (rjpeg_cancelled(decoder)) return RJPEG_CANCELLED;
+        {
+            int marker_status = rjpeg_next_marker(decoder, &marker);
+            if (marker_status == RJPEG_CANCELLED) return marker_status;
+            if (marker_status != 1) return RJPEG_DATA_ERROR;
+        }
         if (marker == RJPEG_SOF0) {
             if (saw_frame || !rjpeg_begin_segment(decoder, &end))
                 return RJPEG_DATA_ERROR;
@@ -672,6 +692,8 @@ static inline int rjpeg_consume_restart(RJpegDecoder* decoder,
     while (decoder->pos < decoder->size &&
            decoder->data[decoder->pos] == 0xffu) {
         decoder->pos++;
+        if ((decoder->pos & 4095u) == 0u && rjpeg_cancelled(decoder))
+            return RJPEG_CANCELLED;
     }
     if (decoder->pos >= decoder->size ||
         decoder->data[decoder->pos++] !=
@@ -699,8 +721,11 @@ static inline int rjpeg_finish_entropy(RJpegDecoder* decoder,
         decoder->data[decoder->pos++] != 0xffu)
         return RJPEG_DATA_ERROR;
     while (decoder->pos < decoder->size &&
-           decoder->data[decoder->pos] == 0xffu)
+           decoder->data[decoder->pos] == 0xffu) {
         decoder->pos++;
+        if ((decoder->pos & 4095u) == 0u && rjpeg_cancelled(decoder))
+            return RJPEG_CANCELLED;
+    }
     if (decoder->pos >= decoder->size || decoder->data[decoder->pos] == 0u)
         return RJPEG_DATA_ERROR;
     *marker_out = (uint16_t)(0xff00u | decoder->data[decoder->pos++]);
@@ -784,22 +809,28 @@ static inline void rjpeg_publish_component_block(
     }
 }
 
-static inline void rjpeg_finalize_pixels(const RJpegDecoder* decoder,
-                                         uint32_t* pixels) {
-    size_t pixel_count = (size_t)(unsigned)decoder->width *
-                         (size_t)(unsigned)decoder->height;
-    for (size_t index = 0u; index < pixel_count; index++) {
-        uint8_t first = (uint8_t)(pixels[index] >> 16);
-        uint8_t second = (uint8_t)(pixels[index] >> 8);
-        uint8_t third = (uint8_t)pixels[index];
-        uint8_t red = first;
-        uint8_t green = first;
-        uint8_t blue = first;
-        if (decoder->num_components == 3)
-            rjpeg_ycbcr_to_rgb(first, second, third, &red, &green, &blue);
-        pixels[index] = 0xff000000u | ((uint32_t)red << 16) |
-                        ((uint32_t)green << 8) | (uint32_t)blue;
+static inline int rjpeg_finalize_pixels(const RJpegDecoder* decoder,
+                                        uint32_t* pixels) {
+    for (int row = 0; row < decoder->height; ++row) {
+        size_t index;
+        const size_t row_start = (size_t)row * (size_t)decoder->width;
+        const size_t row_end = row_start + (size_t)decoder->width;
+        if (rjpeg_cancelled(decoder)) return RJPEG_CANCELLED;
+        for (index = row_start; index < row_end; ++index) {
+            uint8_t first = (uint8_t)(pixels[index] >> 16);
+            uint8_t second = (uint8_t)(pixels[index] >> 8);
+            uint8_t third = (uint8_t)pixels[index];
+            uint8_t red = first;
+            uint8_t green = first;
+            uint8_t blue = first;
+            if (decoder->num_components == 3)
+                rjpeg_ycbcr_to_rgb(first, second, third,
+                                   &red, &green, &blue);
+            pixels[index] = 0xff000000u | ((uint32_t)red << 16) |
+                            ((uint32_t)green << 8) | (uint32_t)blue;
+        }
     }
+    return RJPEG_OK;
 }
 
 static inline int rjpeg_decode_scan_pass(RJpegDecoder* decoder,
@@ -855,6 +886,7 @@ static inline int rjpeg_decode_scan_pass(RJpegDecoder* decoder,
     }
     if (mcu_width <= 0 || mcu_height <= 0) return RJPEG_DATA_ERROR;
     for (int mcu_y = 0; mcu_y < mcu_height; mcu_y++) {
+        if (rjpeg_cancelled(decoder)) return RJPEG_CANCELLED;
         for (int mcu_x = 0; mcu_x < mcu_width; mcu_x++) {
             for (int slot = 0; slot < (int)scan->component_count; slot++) {
                 int block_count = scan->component_count == 1u
@@ -892,10 +924,11 @@ static inline int rjpeg_decode_scan_pass(RJpegDecoder* decoder,
             if (scan->restart_interval > 0 &&
                 decoded_mcus % (uint32_t)scan->restart_interval == 0u &&
                 !(mcu_y == mcu_height - 1 && mcu_x == mcu_width - 1)) {
-                if (rjpeg_consume_restart(decoder, active_components,
-                                          (int)scan->component_count,
-                                          expected_restart) != RJPEG_OK) {
-                    return RJPEG_DATA_ERROR;
+                {
+                    int restart_result = rjpeg_consume_restart(
+                        decoder, active_components,
+                        (int)scan->component_count, expected_restart);
+                    if (restart_result != RJPEG_OK) return restart_result;
                 }
                 expected_restart = (uint8_t)((expected_restart + 1u) & 7u);
             }
@@ -943,7 +976,10 @@ static inline int rjpeg_decode_image_pass(RJpegDecoder* decoder,
                 decoder->pos != decoder->size) {
                 return RJPEG_DATA_ERROR;
             }
-            if (publish_pixels) rjpeg_finalize_pixels(decoder, pixels);
+            if (publish_pixels) {
+                result = rjpeg_finalize_pixels(decoder, pixels);
+                if (result != RJPEG_OK) return result;
+            }
             return RJPEG_OK;
         }
         if (seen_components == expected_components) return RJPEG_DATA_ERROR;
@@ -975,8 +1011,12 @@ static inline int rjpeg_decode_image_pass(RJpegDecoder* decoder,
             } else {
                 return RJPEG_DATA_ERROR;
             }
-            if (result != RJPEG_OK || !rjpeg_next_marker(decoder, &marker))
-                return RJPEG_DATA_ERROR;
+            if (result != RJPEG_OK) return result;
+            {
+                int marker_status = rjpeg_next_marker(decoder, &marker);
+                if (marker_status == RJPEG_CANCELLED) return marker_status;
+                if (marker_status != 1) return RJPEG_DATA_ERROR;
+            }
         }
     }
 }
@@ -995,15 +1035,20 @@ static inline void rjpeg_decoder_clear(RJpegDecoder* decoder) {
     for (index = 0u; index < sizeof(*decoder); ++index) bytes[index] = 0u;
 }
 
-static inline int rjpeg_get_info_with_scratch(const uint8_t* data,
+static inline int rjpeg_get_info_cancellable_with_scratch(
+                                               const uint8_t* data,
                                                size_t size,
                                                int* width,
                                                int* height,
-                                               RJpegDecoder* decoder) {
+                                               RJpegDecoder* decoder,
+                                               RJpegCancellationFunction cancellation,
+                                               void* cancellation_context) {
     if (width) *width = 0;
     if (height) *height = 0;
     if (!data || !width || !height || !decoder) return RJPEG_ERROR;
     rjpeg_decoder_clear(decoder);
+    decoder->cancellation = cancellation;
+    decoder->cancellation_context = cancellation_context;
     size_t scan_position = 0;
     RJpegScan first_scan = RJPEG_ZERO_INIT;
     int result = rjpeg_parse_headers(
@@ -1012,6 +1057,26 @@ static inline int rjpeg_get_info_with_scratch(const uint8_t* data,
     *width = decoder->width;
     *height = decoder->height;
     return RJPEG_OK;
+}
+
+static inline int rjpeg_get_info_with_scratch(const uint8_t* data,
+                                               size_t size,
+                                               int* width,
+                                               int* height,
+                                               RJpegDecoder* decoder) {
+    return rjpeg_get_info_cancellable_with_scratch(
+        data, size, width, height, decoder, NULL, NULL);
+}
+
+static inline int rjpeg_get_info_cancellable(
+    const uint8_t* data, size_t size, int* width, int* height,
+    RJpegCancellationFunction cancellation, void* cancellation_context) {
+    RJpegDecoder decoder = RJPEG_ZERO_INIT;
+    if (width) *width = 0;
+    if (height) *height = 0;
+    return rjpeg_get_info_cancellable_with_scratch(
+        data, size, width, height, &decoder, cancellation,
+        cancellation_context);
 }
 
 static inline int rjpeg_get_info(const uint8_t* data, size_t size,
@@ -1023,16 +1088,21 @@ static inline int rjpeg_get_info(const uint8_t* data, size_t size,
 /*
  * JPEGデコード（簡略版 - grayscale／4:4:4／4:2:2／4:2:0）
  */
-static inline int rjpeg_decode_with_scratch(const uint8_t* data,
+static inline int rjpeg_decode_cancellable_with_scratch(
+                                            const uint8_t* data,
                                             size_t size,
                                             uint32_t* pixels,
                                             size_t pixel_capacity,
                                             int max_width,
                                             int max_height,
-                                            RJpegDecoder* decoder) {
+                                            RJpegDecoder* decoder,
+                                            RJpegCancellationFunction cancellation,
+                                            void* cancellation_context) {
     if (!data || !pixels || max_width <= 0 || max_height <= 0 || !decoder)
         return RJPEG_ERROR;
     rjpeg_decoder_clear(decoder);
+    decoder->cancellation = cancellation;
+    decoder->cancellation_context = cancellation_context;
     size_t scan_position = 0;
     RJpegScan first_scan = RJPEG_ZERO_INIT;
     int result = rjpeg_parse_headers(
@@ -1051,13 +1121,41 @@ static inline int rjpeg_decode_with_scratch(const uint8_t* data,
 
     /* Reparse so table/DRI mutations between scans are reproduced exactly. */
     rjpeg_decoder_clear(decoder);
+    decoder->cancellation = cancellation;
+    decoder->cancellation_context = cancellation_context;
     result = rjpeg_parse_headers(data, size, decoder, &scan_position,
                                  &first_scan);
     if (result != RJPEG_OK) return result;
-    for (size_t index = 0u; index < pixel_count; index++) pixels[index] = 0u;
+    for (int row = 0; row < decoder->height; ++row) {
+        if (rjpeg_cancelled(decoder)) return RJPEG_CANCELLED;
+        memset(pixels + (size_t)row * (size_t)decoder->width, 0,
+               (size_t)decoder->width * sizeof(*pixels));
+    }
 
     /* The deterministic second pass is the only pass that publishes pixels. */
     return rjpeg_decode_image_pass(decoder, &first_scan, pixels, 1);
+}
+
+static inline int rjpeg_decode_with_scratch(const uint8_t* data,
+                                            size_t size,
+                                            uint32_t* pixels,
+                                            size_t pixel_capacity,
+                                            int max_width,
+                                            int max_height,
+                                            RJpegDecoder* decoder) {
+    return rjpeg_decode_cancellable_with_scratch(
+        data, size, pixels, pixel_capacity, max_width, max_height, decoder,
+        NULL, NULL);
+}
+
+static inline int rjpeg_decode_cancellable(
+    const uint8_t* data, size_t size, uint32_t* pixels,
+    size_t pixel_capacity, int max_width, int max_height,
+    RJpegCancellationFunction cancellation, void* cancellation_context) {
+    RJpegDecoder decoder = RJPEG_ZERO_INIT;
+    return rjpeg_decode_cancellable_with_scratch(
+        data, size, pixels, pixel_capacity, max_width, max_height, &decoder,
+        cancellation, cancellation_context);
 }
 
 static inline int rjpeg_decode(const uint8_t* data, size_t size,

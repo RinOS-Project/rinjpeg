@@ -8,7 +8,11 @@ libjpeg. The public header is C11-compatible as well as usable from C++ callers.
 
 Include `rinjpeg.h`. The `static inline` API provides `rjpeg_get_info` and
 `rjpeg_decode`; `_with_scratch` variants accept caller-owned decoder state.
-Decode writes numeric `0xAARRGGBB` words into caller-owned storage.
+`rjpeg_get_info_cancellable` and `rjpeg_decode_cancellable` accept an optional
+caller-owned cancellation predicate. Header parsing polls while walking marker
+fill bytes, entropy decoding polls at MCU-row boundaries, and output conversion
+polls per pixel row. Cancellation returns `RJPEG_CANCELLED`. Decode writes
+numeric `0xAARRGGBB` words into caller-owned storage.
 
 ## Supported and unsupported profiles
 
@@ -33,10 +37,11 @@ tables in a local `RJpegDecoder`; users with constrained stacks should use the
 caller-scratch entry point.
 
 The decoder caps encoded input at 64 MiB, either dimension at 8192, and total
-pixels at 16,777,216. `RJPEG_OK`, `RJPEG_UNSUPPORTED`, `RJPEG_DATA_ERROR`, and
-`RJPEG_ERROR` distinguish success, unsupported profile, malformed data, and
-invalid/capacity failure. The direct API is allocation-free but does not
-provide a CPU deadline or cancellation callback.
+pixels at 16,777,216. `RJPEG_OK`, `RJPEG_UNSUPPORTED`, `RJPEG_DATA_ERROR`,
+`RJPEG_ERROR`, and `RJPEG_CANCELLED` distinguish success, unsupported profile,
+malformed data, invalid/capacity failure, and caller cancellation. The direct
+API is allocation-free. Cancellation callbacks run synchronously on the
+calling thread and should be bounded and side-effect safe.
 
 ## Security, ABI, build, and tests
 
@@ -51,13 +56,13 @@ this repository has no standalone build or test target.
 | Requirement | Contract |
 | --- | --- |
 | Purpose | RinJPEG is RinOS's bounded decoder for a documented baseline JPEG subset, intended for use through RinImage or directly through its C interface. |
-| Supported API | The public C interface is `rinjpeg.h`. It decodes 8-bit baseline SOF0 grayscale or three-component JPEG with supported 4:4:4, 4:2:2, and 4:2:0 sampling. |
+| Supported API | The public C interface is `rinjpeg.h`. It decodes 8-bit baseline SOF0 grayscale or three-component JPEG with supported 4:4:4, 4:2:2, and 4:2:0 sampling; cancellable entry points return `RJPEG_CANCELLED` when their caller predicate requests cancellation. |
 | Unsupported API | Progressive JPEG, other frame types, unsupported component layouts, and formats other than JPEG are rejected. |
 | ownership | The caller owns the input bytes and destination buffer and keeps them valid for the call. The decoder does not retain either buffer. |
 | thread-safety | Independent calls with separate input and output buffers may run concurrently. Do not share writable output buffers between calls. |
 | limits | Input is limited to 64 MiB; width and height to 8192 each; decoded pixels to 16,777,216. Exceeding a limit is rejected. |
-| errors | Invalid, truncated, unsupported, or over-limit input returns a failure status; callers must not use output unless the call succeeds. |
+| errors | Invalid, truncated, unsupported, over-limit, or cancelled input returns a failure status; callers must not use output unless the call succeeds. |
 | ABI stability | The C declarations in `rinjpeg.h` are the public ABI. No ABI stability guarantee is currently published; consumers should rebuild against the version they use. |
-| security | Treat JPEG bytes as untrusted. The decoder applies size and dimension limits, but callers remain responsible for checking decode results and bounding surrounding work. |
+| security | Treat JPEG bytes as untrusted. The decoder applies size and dimension limits and cancellable callers can bound marker, MCU-row, and output-row work; callers remain responsible for checking status and surrounding work. |
 | build | No standalone build entry point is provided. RinImage is the supported integration point in the RinOS build. |
 | test | No standalone test command is provided by this repository. RinImage integration tests, when present in the consuming tree, are the relevant validation. |
