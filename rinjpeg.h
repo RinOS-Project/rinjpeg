@@ -1,7 +1,7 @@
 /*
  * RinOS JPEG Decoder ✿
  * 軽量JPEGデコーダー
- * Baseline JPEG (SOF0) 対応
+ * Bounded sequential JPEG (SOF0 / SOF1 subset) 対応
  */
 
 #ifndef RINJPEG_H
@@ -35,6 +35,7 @@
 #define RJPEG_SOI   0xFFD8  /* Start of Image */
 #define RJPEG_EOI   0xFFD9  /* End of Image */
 #define RJPEG_SOF0  0xFFC0  /* Baseline DCT */
+#define RJPEG_SOF1  0xFFC1  /* Extended sequential DCT */
 #define RJPEG_SOF2  0xFFC2  /* Progressive DCT */
 #define RJPEG_DHT   0xFFC4  /* Define Huffman Table */
 #define RJPEG_DQT   0xFFDB  /* Define Quantization Table */
@@ -462,7 +463,7 @@ static inline int rjpeg_parse_dht(RJpegDecoder* d, size_t end) {
     return d->pos == end ? RJPEG_OK : RJPEG_DATA_ERROR;
 }
 
-static inline int rjpeg_parse_sof0(RJpegDecoder* d, size_t end) {
+static inline int rjpeg_parse_sequential_sof(RJpegDecoder* d, size_t end) {
     uint8_t precision = 0;
     uint8_t component_count = 0;
     uint16_t height = 0;
@@ -502,10 +503,13 @@ static inline int rjpeg_parse_sof0(RJpegDecoder* d, size_t end) {
         if (components[0].h_samp != 1 || components[0].v_samp != 1)
             return RJPEG_UNSUPPORTED;
     } else if (!((components[0].h_samp == 1 &&
-                  components[0].v_samp == 1) ||
+                  (components[0].v_samp == 1 ||
+                   components[0].v_samp == 2)) ||
                  (components[0].h_samp == 2 &&
                   (components[0].v_samp == 1 ||
-                   components[0].v_samp == 2))) ||
+                   components[0].v_samp == 2)) ||
+                 (components[0].h_samp == 4 &&
+                  components[0].v_samp == 1)) ||
                components[1].h_samp != 1 ||
                components[1].v_samp != 1 ||
                components[2].h_samp != 1 ||
@@ -623,10 +627,10 @@ static inline int rjpeg_parse_headers(const uint8_t* data,
             if (marker_status == RJPEG_CANCELLED) return marker_status;
             if (marker_status != 1) return RJPEG_DATA_ERROR;
         }
-        if (marker == RJPEG_SOF0) {
+        if (marker == RJPEG_SOF0 || marker == RJPEG_SOF1) {
             if (saw_frame || !rjpeg_begin_segment(decoder, &end))
                 return RJPEG_DATA_ERROR;
-            int result = rjpeg_parse_sof0(decoder, end);
+            int result = rjpeg_parse_sequential_sof(decoder, end);
             if (result != RJPEG_OK) return result;
             if (decoder->width > RJPEG_MAX_DIMENSION ||
                 decoder->height > RJPEG_MAX_DIMENSION ||
@@ -742,16 +746,20 @@ static inline int rjpeg_frame_sampling(const RJpegDecoder* decoder,
         return RJPEG_DATA_ERROR;
     max_horizontal_sampling = decoder->comp[0].h_samp;
     max_vertical_sampling = decoder->comp[0].v_samp;
-    if ((max_horizontal_sampling != 1 && max_horizontal_sampling != 2) ||
+    if ((max_horizontal_sampling != 1 && max_horizontal_sampling != 2 &&
+         max_horizontal_sampling != 4) ||
         (max_vertical_sampling != 1 && max_vertical_sampling != 2) ||
         (decoder->num_components == 1 &&
          (max_horizontal_sampling != 1 || max_vertical_sampling != 1)) ||
         (decoder->num_components == 3 &&
          !((max_horizontal_sampling == 1 &&
-            max_vertical_sampling == 1) ||
+            (max_vertical_sampling == 1 ||
+             max_vertical_sampling == 2)) ||
            (max_horizontal_sampling == 2 &&
             (max_vertical_sampling == 1 ||
-             max_vertical_sampling == 2)))) ||
+             max_vertical_sampling == 2)) ||
+           (max_horizontal_sampling == 4 &&
+            max_vertical_sampling == 1))) ||
         (decoder->num_components == 3 &&
          (decoder->comp[1].h_samp != 1 ||
           decoder->comp[1].v_samp != 1 ||
