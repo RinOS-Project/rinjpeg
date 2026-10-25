@@ -20,15 +20,18 @@ The decoder accepts 8-bit baseline sequential DCT (SOF0) and a bounded 8-bit
 Huffman sequential subset of extended sequential DCT (SOF1), with one grayscale
 component or three color components. The SOF1 subset uses the same sequential
 scan parameters and 8-bit quantization tables as the baseline path. Three-
-component images support 4:4:4, 4:2:2, 4:2:0, 4:4:0, and 4:1:1 sampling.
-Restart intervals, quantization/Huffman tables, and ordinary APP/COM marker
-segments are parsed.
+component luma factors are limited to `{1, 2, 4}` horizontally and vertically
+with a product no greater than eight; each chroma component uses `1x1`. This
+includes `4x2` and `2x4` luma MCUs (ten blocks total across Y, Cb, and Cr) while
+keeping per-MCU coefficient work bounded. Grayscale remains `1x1`. Restart
+intervals, quantization/Huffman tables, and ordinary APP/COM marker segments
+are parsed.
 
 Progressive SOF2, arithmetic or other JPEG processes, non-8-bit precision,
-other component counts, and other sampling layouts return an unsupported or
-data error. The decoder does not expose EXIF, ICC, XMP, orientation, or a
-complete color-management contract. The presence of JPEG markers in the header
-does not imply that those profiles are decoded.
+other component counts, and sampling factors outside this bounded set return
+an unsupported or data error. The decoder does not expose EXIF, ICC, XMP,
+orientation, or a complete color-management contract. The presence of JPEG
+markers in the header does not imply that those profiles are decoded.
 
 ## Ownership, limits, and errors
 
@@ -59,7 +62,7 @@ this repository has no standalone build or test target.
 | Requirement | Contract |
 | --- | --- |
 | Purpose | RinJPEG is RinOS's bounded decoder for a documented sequential JPEG subset, intended for use through RinImage or directly through its C interface. |
-| Supported API | The public C interface is `rinjpeg.h`. It decodes 8-bit SOF0 and bounded SOF1 sequential grayscale or three-component JPEG, with 4:4:4, 4:2:2, 4:2:0, 4:4:0, and 4:1:1 sampling; cancellable entry points return `RJPEG_CANCELLED` when their caller predicate requests cancellation. |
+| Supported API | The public C interface is `rinjpeg.h`. It decodes 8-bit SOF0 and bounded SOF1 sequential grayscale or three-component JPEG. Three-component luma factors are limited to `{1, 2, 4}` horizontally and vertically with a product no greater than eight; each chroma factor is `1x1`. Cancellable entry points return `RJPEG_CANCELLED` when their caller predicate requests cancellation. |
 | Unsupported API | Progressive JPEG, other frame types, unsupported component layouts, and formats other than JPEG are rejected. |
 | ownership | The caller owns the input bytes and destination buffer and keeps them valid for the call. The decoder does not retain either buffer. |
 | thread-safety | Independent calls with separate input and output buffers may run concurrently. Do not share writable output buffers between calls. |

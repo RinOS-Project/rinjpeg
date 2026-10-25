@@ -29,7 +29,7 @@
 #define RJPEG_MAX_INPUT_BYTES (64u * 1024u * 1024u)
 #define RJPEG_MAX_DIMENSION 8192
 #define RJPEG_MAX_PIXELS (4096u * 4096u)
-#define RJPEG_MAX_BLOCKS_PER_COMPONENT 4
+#define RJPEG_MAX_BLOCKS_PER_COMPONENT 8
 
 /* JPEGマーカー */
 #define RJPEG_SOI   0xFFD8  /* Start of Image */
@@ -463,6 +463,13 @@ static inline int rjpeg_parse_dht(RJpegDecoder* d, size_t end) {
     return d->pos == end ? RJPEG_OK : RJPEG_DATA_ERROR;
 }
 
+static inline int rjpeg_sampling_factors_supported(int horizontal,
+                                                    int vertical) {
+    return (horizontal == 1 || horizontal == 2 || horizontal == 4) &&
+           (vertical == 1 || vertical == 2 || vertical == 4) &&
+           horizontal * vertical <= RJPEG_MAX_BLOCKS_PER_COMPONENT;
+}
+
 static inline int rjpeg_parse_sequential_sof(RJpegDecoder* d, size_t end) {
     uint8_t precision = 0;
     uint8_t component_count = 0;
@@ -502,14 +509,8 @@ static inline int rjpeg_parse_sequential_sof(RJpegDecoder* d, size_t end) {
     if (component_count == 1u) {
         if (components[0].h_samp != 1 || components[0].v_samp != 1)
             return RJPEG_UNSUPPORTED;
-    } else if (!((components[0].h_samp == 1 &&
-                  (components[0].v_samp == 1 ||
-                   components[0].v_samp == 2)) ||
-                 (components[0].h_samp == 2 &&
-                  (components[0].v_samp == 1 ||
-                   components[0].v_samp == 2)) ||
-                 (components[0].h_samp == 4 &&
-                  components[0].v_samp == 1)) ||
+    } else if (!rjpeg_sampling_factors_supported(
+                   components[0].h_samp, components[0].v_samp) ||
                components[1].h_samp != 1 ||
                components[1].v_samp != 1 ||
                components[2].h_samp != 1 ||
@@ -746,20 +747,10 @@ static inline int rjpeg_frame_sampling(const RJpegDecoder* decoder,
         return RJPEG_DATA_ERROR;
     max_horizontal_sampling = decoder->comp[0].h_samp;
     max_vertical_sampling = decoder->comp[0].v_samp;
-    if ((max_horizontal_sampling != 1 && max_horizontal_sampling != 2 &&
-         max_horizontal_sampling != 4) ||
-        (max_vertical_sampling != 1 && max_vertical_sampling != 2) ||
+    if (!rjpeg_sampling_factors_supported(max_horizontal_sampling,
+                                          max_vertical_sampling) ||
         (decoder->num_components == 1 &&
          (max_horizontal_sampling != 1 || max_vertical_sampling != 1)) ||
-        (decoder->num_components == 3 &&
-         !((max_horizontal_sampling == 1 &&
-            (max_vertical_sampling == 1 ||
-             max_vertical_sampling == 2)) ||
-           (max_horizontal_sampling == 2 &&
-            (max_vertical_sampling == 1 ||
-             max_vertical_sampling == 2)) ||
-           (max_horizontal_sampling == 4 &&
-            max_vertical_sampling == 1))) ||
         (decoder->num_components == 3 &&
          (decoder->comp[1].h_samp != 1 ||
           decoder->comp[1].v_samp != 1 ||
